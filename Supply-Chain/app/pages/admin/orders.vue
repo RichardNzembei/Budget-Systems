@@ -530,6 +530,7 @@ const getDeliveryColor = (status) => {
 }
 
 const formatStatus = (status) => {
+  if (!status) return 'N/A'
   return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
 }
 

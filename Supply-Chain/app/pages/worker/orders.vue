@@ -23,7 +23,7 @@
         Pending
       </button>
       <button
-        @click="filterType === 'delivered'"
+        @click="filterType = 'delivered'"
         class="px-4 py-2 rounded-lg text-sm font-medium transition-all"
         :class="filterType === 'delivered' ? 'bg-green-500/20 text-green-400 border border-green-500/30' : 'bg-zinc-900 text-zinc-400 border border-zinc-800 hover:text-white'"
       >
@@ -255,6 +255,7 @@ const filteredOrders = computed(() => {
 })
 
 const formatStatus = (status) => {
+  if (!status) return 'N/A'
   return status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
 }
 

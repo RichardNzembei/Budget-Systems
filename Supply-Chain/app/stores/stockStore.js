@@ -6,7 +6,7 @@ import debounce from "lodash/debounce";
 const apiBaseUrl =
   process.env.NODE_ENV === "production"
     ? "https://budget-hair-stock-management-system.onrender.com"
-    : "http://localhost:5000";
+    : "http://165.22.220.142";
 
 export const useStockStore = defineStore("stock", {
   state: () => ({
@@ -97,7 +97,7 @@ export const useStockStore = defineStore("stock", {
         console.log("Using recent stock data, skipping fetch");
         return;
       }
-    
+
       try {
         this.loading = true;
         const response = await axios.get(`${apiBaseUrl}/api/stock`);
@@ -111,7 +111,7 @@ export const useStockStore = defineStore("stock", {
         this.loading = false;
       }
     }, 500),
-    
+
 
     async fetchStockHistory() {
       try {
@@ -132,17 +132,17 @@ export const useStockStore = defineStore("stock", {
         this.loading = true;
         const stock = { productType, productSubtype, quantity };
         const response = await axios.post(`${apiBaseUrl}/api/stock`, stock);
-    
+
         if (response.status === 201) {
           console.log("Stock added successfully:", response.data);
-    
+
           // Update local stock immediately using the response
           this.updateStockFromSocket({
             productType,
             productSubtype,
             newStock: (this.stock[productType]?.[productSubtype] || 0) + quantity,
           });
-    
+
           await this.fetchStockHistory();
         } else {
           console.error("Failed to add stock:", response.data);
@@ -162,16 +162,16 @@ export const useStockStore = defineStore("stock", {
           productSubtype,
           quantity,
         });
-    
+
         if (response.status === 200) {
           console.log("Stock edited successfully:", response.data);
-    
+
           this.updateStockFromSocket({
             productType,
             productSubtype,
             newStock: quantity, // here you set quantity as new stock amount
           });
-    
+
           await this.fetchStockHistory();
         }
       } catch (error) {
@@ -188,16 +188,16 @@ export const useStockStore = defineStore("stock", {
         const response = await axios.delete(`${apiBaseUrl}/api/stock`, {
           data: { productType, productSubtype },
         });
-    
+
         if (response.status === 200) {
           console.log("Stock deleted successfully:", response.data);
-    
+
           this.updateStockFromSocket({
             productType,
             productSubtype,
             newStock: null, // Indicating deletion
           });
-    
+
           await this.fetchStockHistory();
         }
       } catch (error) {
@@ -207,19 +207,19 @@ export const useStockStore = defineStore("stock", {
         this.loading = false;
       }
     },
-    
+
 
     async deleteProductType(productType) {
       try {
         this.loading = true;
         await axios.delete(`${apiBaseUrl}/api/stock/${productType}`);
         console.log(`${productType} deleted successfully`);
-    
+
         if (this.stock[productType]) {
           delete this.stock[productType];
           this.cacheStockData(this.stock);
         }
-    
+
         await this.fetchStockHistory();
       } catch (error) {
         console.error("Error deleting product type:", error.response?.data || error.message);
@@ -228,20 +228,20 @@ export const useStockStore = defineStore("stock", {
         this.loading = false;
       }
     },
-    
+
 
     async deleteProductSubtype(productType, productSubtype) {
       try {
         this.loading = true;
         await axios.delete(`${apiBaseUrl}/api/stock/${productType}/${productSubtype}`);
         console.log(`${productSubtype} deleted successfully`);
-    
+
         this.updateStockFromSocket({
           productType,
           productSubtype,
           newStock: null,
         });
-    
+
         await this.fetchStockHistory();
       } catch (error) {
         console.error("Error deleting product subtype:", error.response?.data || error.message);
@@ -249,7 +249,7 @@ export const useStockStore = defineStore("stock", {
       } finally {
         this.loading = false;
       }
-    },    
+    },
 
     async cacheStockData(stockData) {
       try {
