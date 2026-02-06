@@ -53,8 +53,8 @@ app.get('/health', (req, res) => {
 });
 
 // Routes
-app.use('/api', stockRoutes);
-app.use('/api', orderRoutes);
+app.use('/api/stock', stockRoutes);
+app.use('/api/orders', orderRoutes);
 
 // Socket.IO connection
 io.on('connection', (socket) => {

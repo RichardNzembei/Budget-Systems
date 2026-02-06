@@ -40,7 +40,7 @@ const generateOrderId = () => {
 };
 
 // Create new order
-router.post('/orders', async (req, res) => {
+router.post('/', async (req, res) => {
     const {
         customerName,
         customerPhone,
@@ -160,7 +160,7 @@ router.post('/orders', async (req, res) => {
 });
 
 // Get all orders (unchanged - no productType/subtype here)
-router.get('/orders', async (req, res) => {
+router.get('/', async (req, res) => {
     try {
         const [orders] = await db.query(
             'SELECT * FROM orders ORDER BY createdAt DESC'
@@ -173,13 +173,7 @@ router.get('/orders', async (req, res) => {
     }
 });
 
-// ────────────────────────────────────────────────
-// The rest of the file (patch, delete, return, cancel, etc.)
-// only needs changes in the stock-restore and stock-update parts
-// ────────────────────────────────────────────────
-
-// Delete order - restore stock
-router.delete('/orders/:id', async (req, res) => {
+router.delete('/:id', async (req, res) => {
     const orderId = req.params.id;
 
     const connection = await db.getConnection();
@@ -220,7 +214,7 @@ router.delete('/orders/:id', async (req, res) => {
 });
 
 // Return order - restore stock + emit
-router.patch('/orders/:id/return', async (req, res) => {
+router.patch('/:id/return', async (req, res) => {
     const orderId = req.params.id;
     const { quantity, returnType } = req.body;
 
@@ -297,7 +291,7 @@ router.patch('/orders/:id/return', async (req, res) => {
 });
 
 // Cancel order - restore stock
-router.patch('/orders/:id/cancel', async (req, res) => {
+router.patch('/:id/cancel', async (req, res) => {
     const orderId = req.params.id;
 
     const connection = await db.getConnection();
