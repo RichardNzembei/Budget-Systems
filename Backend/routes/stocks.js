@@ -13,22 +13,22 @@ router.post('/stock', async (req, res) => {
   try {
     // Insert or update stock
     await db.query(
-        `INSERT INTO stock (product_type, product_subtype, quantity)
-             VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)`,
+        `INSERT INTO stock (productType, productSubtype, quantity)
+         VALUES (?, ?, ?)
+         ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)`,
         [productType, productSubtype, quantity]
     );
 
     // Add to history
     await db.query(
-        `INSERT INTO stock_history (product_type, product_subtype, quantity, action)
-             VALUES (?, ?, ?, 'added')`,
+        `INSERT INTO stock_history (productType, productSubtype, quantity, action)
+         VALUES (?, ?, ?, 'added')`,
         [productType, productSubtype, quantity]
     );
 
     // Get updated stock
     const [rows] = await db.query(
-        'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
+        'SELECT quantity FROM stock WHERE productType = ? AND productSubtype = ?',
         [productType, productSubtype]
     );
 
@@ -65,7 +65,7 @@ router.put('/stock', async (req, res) => {
   try {
     // Check if exists
     const [existing] = await db.query(
-        'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
+        'SELECT quantity FROM stock WHERE productType = ? AND productSubtype = ?',
         [productType, productSubtype]
     );
 
@@ -77,14 +77,14 @@ router.put('/stock', async (req, res) => {
 
     // Update stock
     await db.query(
-        'UPDATE stock SET quantity = ? WHERE product_type = ? AND product_subtype = ?',
+        'UPDATE stock SET quantity = ? WHERE productType = ? AND productSubtype = ?',
         [quantity, productType, productSubtype]
     );
 
     // Add to history
     await db.query(
-        `INSERT INTO stock_history (product_type, product_subtype, old_quantity, new_quantity, action)
-             VALUES (?, ?, ?, ?, 'edited')`,
+        `INSERT INTO stock_history (productType, productSubtype, oldQuantity, newQuantity, action)
+         VALUES (?, ?, ?, ?, 'edited')`,
         [productType, productSubtype, oldQuantity, quantity]
     );
 
@@ -117,7 +117,7 @@ router.delete('/stock', async (req, res) => {
 
   try {
     const [result] = await db.query(
-        'DELETE FROM stock WHERE product_type = ? AND product_subtype = ?',
+        'DELETE FROM stock WHERE productType = ? AND productSubtype = ?',
         [productType, productSubtype]
     );
 
@@ -152,7 +152,7 @@ router.delete('/stock/:productType', async (req, res) => {
 
   try {
     const [result] = await db.query(
-        'DELETE FROM stock WHERE product_type = ?',
+        'DELETE FROM stock WHERE productType = ?',
         [productType]
     );
 
@@ -175,15 +175,15 @@ router.delete('/stock/:productType', async (req, res) => {
 // Get all stock
 router.get('/stock', async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT * FROM stock ORDER BY product_type, product_subtype');
+    const [rows] = await db.query('SELECT * FROM stock ORDER BY productType, productSubtype');
 
-    // Group by product_type
+    // Group by productType
     const stock = {};
     rows.forEach(row => {
-      if (!stock[row.product_type]) {
-        stock[row.product_type] = {};
+      if (!stock[row.productType]) {
+        stock[row.productType] = {};
       }
-      stock[row.product_type][row.product_subtype] = row.quantity;
+      stock[row.productType][row.productSubtype] = row.quantity;
     });
 
     res.status(200).json(stock);
@@ -198,8 +198,8 @@ router.get('/stock/history', async (req, res) => {
   try {
     const [rows] = await db.query(
         `SELECT * FROM stock_history
-             WHERE DATE(timestamp) = CURDATE()
-             ORDER BY timestamp DESC`
+         WHERE DATE(timestamp) = CURDATE()
+         ORDER BY timestamp DESC`
     );
 
     res.status(200).json(rows);

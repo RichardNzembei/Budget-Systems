@@ -6,7 +6,7 @@ require('dotenv').config();
 
 // Configure web-push
 webPush.setVapidDetails(
-    process.env.VAPID_SUBJECT || 'mailto:richardsonreuben78@gmail.com',  // fallback
+    process.env.VAPID_SUBJECT || 'mailto:richardsonreuben78@gmail.com',
     process.env.VAPID_PUBLIC_KEY,
     process.env.VAPID_PRIVATE_KEY
 );
@@ -15,7 +15,6 @@ webPush.setVapidDetails(
 const sendNotification = async (notificationPayload) => {
     try {
         const [subscriptions] = await db.query('SELECT * FROM subscriptions');
-
         await Promise.all(
             subscriptions.map((sub) => {
                 const pushSubscription = {
@@ -35,6 +34,11 @@ const sendNotification = async (notificationPayload) => {
     }
 };
 
+// Generate unique order ID
+const generateOrderId = () => {
+    return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+};
+
 // Create new order
 router.post('/orders', async (req, res) => {
     const {
@@ -48,7 +52,8 @@ router.post('/orders', async (req, res) => {
         paymentStatus,
         deliveryLocation,
         deliveryStatus,
-        notes
+        notes,
+        priority
     } = req.body;
 
     // Validation
@@ -61,15 +66,44 @@ router.post('/orders', async (req, res) => {
         return res.status(400).json({ error: 'Invalid quantity' });
     }
 
+    const connection = await db.getConnection();
+
     try {
+        await connection.beginTransaction();
+
+        // Check stock availability
+        const [stockRows] = await connection.query(
+            'SELECT quantity FROM stock WHERE productType = ? AND productSubtype = ?',
+            [productType, productSubtype]
+        );
+
+        if (stockRows.length === 0 || stockRows[0].quantity < quantity) {
+            await connection.rollback();
+            return res.status(400).json({
+                error: 'Insufficient stock',
+                available: stockRows[0]?.quantity || 0,
+                requested: quantity
+            });
+        }
+
+        // Deduct stock
+        await connection.query(
+            'UPDATE stock SET quantity = quantity - ? WHERE productType = ? AND productSubtype = ?',
+            [quantity, productType, productSubtype]
+        );
+
+        // Generate order ID
+        const orderId = req.body.orderId || generateOrderId();
+
         // Insert order
-        const [result] = await db.query(
+        const [result] = await connection.query(
             `INSERT INTO orders (
-                customer_name, customer_phone, product_type, product_subtype,
-                quantity, total_amount, amount_paid, payment_status,
-                delivery_location, delivery_status, notes
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                orderId, customerName, customerPhone, productType, productSubtype,
+                quantity, totalAmount, amountPaid, paymentStatus,
+                deliveryLocation, deliveryStatus, notes, priority
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
+                orderId,
                 customerName,
                 customerPhone,
                 productType,
@@ -80,9 +114,12 @@ router.post('/orders', async (req, res) => {
                 paymentStatus || 'unpaid',
                 deliveryLocation,
                 deliveryStatus || 'pending',
-                notes || ''
+                notes || '',
+                priority || 'normal'
             ]
         );
+
+        await connection.commit();
 
         // Get created order
         const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [result.insertId]);
@@ -92,10 +129,21 @@ router.post('/orders', async (req, res) => {
         console.log('Emitting order-created:', orderResponse);
         req.io.emit('order-created', orderResponse);
 
+        // Emit stock update
+        const [updatedStock] = await db.query(
+            'SELECT quantity FROM stock WHERE productType = ? AND productSubtype = ?',
+            [productType, productSubtype]
+        );
+        req.io.emit('stock-updated', {
+            productType,
+            productSubtype,
+            newStock: updatedStock[0].quantity
+        });
+
         // Send notification
         const notificationPayload = {
             title: 'New Order Created',
-            body: `Order for ${customerName} - ${quantity} units of ${productSubtype}`,
+            body: `Order ${orderId} - ${quantity} units of ${productSubtype}`,
             icon: '/icon.png',
             actions: [{ action: 'view', title: 'View Order' }],
         };
@@ -103,8 +151,11 @@ router.post('/orders', async (req, res) => {
 
         res.status(201).json(orderResponse);
     } catch (error) {
+        await connection.rollback();
         console.error('Error creating order:', error);
         res.status(500).json({ error: 'Server error creating order' });
+    } finally {
+        connection.release();
     }
 });
 
@@ -112,9 +163,8 @@ router.post('/orders', async (req, res) => {
 router.get('/orders', async (req, res) => {
     try {
         const [orders] = await db.query(
-            'SELECT * FROM orders ORDER BY created_at DESC'
+            'SELECT * FROM orders ORDER BY createdAt DESC'
         );
-
         console.log('Fetched orders:', orders.length);
         res.status(200).json(orders);
     } catch (error) {
@@ -133,19 +183,17 @@ router.patch('/orders/:id/delivery', async (req, res) => {
     }
 
     try {
-        // Check if order exists
         const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
 
         if (existing.length === 0) {
             return res.status(404).json({ error: 'Order not found' });
         }
 
-        // Build update query
-        let updateQuery = 'UPDATE orders SET delivery_status = ?';
+        let updateQuery = 'UPDATE orders SET deliveryStatus = ?';
         let params = [deliveryStatus];
 
         if (deliveryStatus === 'delivered') {
-            updateQuery += ', delivered_at = NOW(), delivered_by = ?';
+            updateQuery += ', deliveredAt = NOW(), deliveredBy = ?';
             params.push(deliveredBy || 'Worker');
         }
 
@@ -154,20 +202,15 @@ router.patch('/orders/:id/delivery', async (req, res) => {
 
         await db.query(updateQuery, params);
 
-        // Get updated order
         const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
         const orderResponse = orders[0];
 
-        // Emit socket event
-        console.log('Emitting order-updated:', orderResponse);
         req.io.emit('order-updated', orderResponse);
 
-        // Send notification
         const notificationPayload = {
             title: 'Order Status Updated',
-            body: `Order for ${orderResponse.customer_name} marked as ${deliveryStatus}`,
+            body: `Order ${orderResponse.orderId} marked as ${deliveryStatus}`,
             icon: '/icon.png',
-            actions: [{ action: 'view', title: 'View Order' }],
         };
         await sendNotification(notificationPayload);
 
@@ -188,23 +231,21 @@ router.patch('/orders/:id/payment', async (req, res) => {
     }
 
     try {
-        // Check if order exists
         const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
 
         if (existing.length === 0) {
             return res.status(404).json({ error: 'Order not found' });
         }
 
-        // Build update query
         let updateFields = [];
         let params = [];
 
         if (paymentStatus) {
-            updateFields.push('payment_status = ?');
+            updateFields.push('paymentStatus = ?');
             params.push(paymentStatus);
         }
         if (amountPaid !== undefined) {
-            updateFields.push('amount_paid = ?');
+            updateFields.push('amountPaid = ?');
             params.push(parseFloat(amountPaid));
         }
 
@@ -215,12 +256,9 @@ router.patch('/orders/:id/payment', async (req, res) => {
             params
         );
 
-        // Get updated order
         const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
         const orderResponse = orders[0];
 
-        // Emit socket event
-        console.log('Emitting order-updated:', orderResponse);
         req.io.emit('order-updated', orderResponse);
 
         res.status(200).json(orderResponse);
@@ -234,20 +272,43 @@ router.patch('/orders/:id/payment', async (req, res) => {
 router.delete('/orders/:id', async (req, res) => {
     const orderId = req.params.id;
 
-    try {
-        const [result] = await db.query('DELETE FROM orders WHERE id = ?', [orderId]);
+    const connection = await db.getConnection();
 
-        if (result.affectedRows === 0) {
+    try {
+        await connection.beginTransaction();
+
+        // Get order details before deleting
+        const [orders] = await connection.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+
+        if (orders.length === 0) {
+            await connection.rollback();
             return res.status(404).json({ error: 'Order not found' });
         }
 
-        // Emit socket event
+        const order = orders[0];
+
+        // Restore stock if order wasn't delivered
+        if (order.deliveryStatus !== 'delivered' && order.deliveryStatus !== 'returned') {
+            await connection.query(
+                'UPDATE stock SET quantity = quantity + ? WHERE productType = ? AND productSubtype = ?',
+                [order.quantity, order.productType, order.productSubtype]
+            );
+        }
+
+        // Delete order
+        await connection.query('DELETE FROM orders WHERE id = ?', [orderId]);
+
+        await connection.commit();
+
         req.io.emit('order-deleted', { id: parseInt(orderId) });
 
         res.status(200).json({ message: 'Order deleted successfully' });
     } catch (error) {
+        await connection.rollback();
         console.error('Error deleting order:', error);
         res.status(500).json({ error: 'Error deleting order' });
+    } finally {
+        connection.release();
     }
 });
 
@@ -298,7 +359,7 @@ router.patch('/orders/:id/worker-notes', async (req, res) => {
         }
 
         await db.query(
-            'UPDATE orders SET worker_notes = ?, worker_name = ?, notes_added_at = NOW() WHERE id = ?',
+            'UPDATE orders SET workerNotes = ?, workerName = ?, notesAddedAt = NOW() WHERE id = ?',
             [workerNotes, workerName || 'Worker', orderId]
         );
 
@@ -323,35 +384,33 @@ router.patch('/orders/:id/return', async (req, res) => {
         return res.status(400).json({ error: 'Quantity and return type are required' });
     }
 
+    const connection = await db.getConnection();
+
     try {
-        const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+        await connection.beginTransaction();
+
+        const [existing] = await connection.query('SELECT * FROM orders WHERE id = ?', [orderId]);
 
         if (existing.length === 0) {
+            await connection.rollback();
             return res.status(404).json({ error: 'Order not found' });
         }
 
         const orderData = existing[0];
 
         if (quantity > orderData.quantity) {
+            await connection.rollback();
             return res.status(400).json({ error: 'Return quantity exceeds order quantity' });
         }
 
         // Restore stock
-        await db.query(
-            `INSERT INTO stock (product_type, product_subtype, quantity)
-             VALUES (?, ?, ?)
-             ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)`,
-            [orderData.product_type, orderData.product_subtype, parseInt(quantity)]
-        );
-
-        // Get updated stock quantity
-        const [stockRows] = await db.query(
-            'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
-            [orderData.product_type, orderData.product_subtype]
+        await connection.query(
+            'UPDATE stock SET quantity = quantity + ? WHERE productType = ? AND productSubtype = ?',
+            [parseInt(quantity), orderData.productType, orderData.productSubtype]
         );
 
         // Update order
-        let updateQuery = 'UPDATE orders SET delivery_status = ?, returned_quantity = ?, return_type = ?, returned_at = NOW()';
+        let updateQuery = 'UPDATE orders SET deliveryStatus = ?, returnedQuantity = ?, returnType = ?, returnedAt = NOW()';
         let params = ['returned', quantity, returnType];
 
         if (returnType === 'partial') {
@@ -362,26 +421,35 @@ router.patch('/orders/:id/return', async (req, res) => {
         updateQuery += ' WHERE id = ?';
         params.push(orderId);
 
-        await db.query(updateQuery, params);
+        await connection.query(updateQuery, params);
 
-        // Get updated order
+        await connection.commit();
+
+        // Get updated order and stock
         const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
         const orderResponse = orders[0];
 
+        const [stockRows] = await db.query(
+            'SELECT quantity FROM stock WHERE productType = ? AND productSubtype = ?',
+            [orderData.productType, orderData.productSubtype]
+        );
+
         req.io.emit('order-updated', orderResponse);
 
-        // Emit stock update
         const stockPayload = {
-            productType: orderData.product_type,
-            productSubtype: orderData.product_subtype,
+            productType: orderData.productType,
+            productSubtype: orderData.productSubtype,
             newStock: stockRows[0].quantity
         };
         req.io.emit('stock-updated', stockPayload);
 
         res.status(200).json(orderResponse);
     } catch (error) {
+        await connection.rollback();
         console.error('Error returning order:', error);
         res.status(500).json({ error: 'Error returning order' });
+    } finally {
+        connection.release();
     }
 });
 
@@ -389,17 +457,34 @@ router.patch('/orders/:id/return', async (req, res) => {
 router.patch('/orders/:id/cancel', async (req, res) => {
     const orderId = req.params.id;
 
+    const connection = await db.getConnection();
+
     try {
-        const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+        await connection.beginTransaction();
+
+        const [existing] = await connection.query('SELECT * FROM orders WHERE id = ?', [orderId]);
 
         if (existing.length === 0) {
+            await connection.rollback();
             return res.status(404).json({ error: 'Order not found' });
         }
 
-        await db.query(
-            'UPDATE orders SET delivery_status = ?, cancelled_at = NOW() WHERE id = ?',
+        const order = existing[0];
+
+        // Restore stock if not yet delivered
+        if (order.deliveryStatus !== 'delivered') {
+            await connection.query(
+                'UPDATE stock SET quantity = quantity + ? WHERE productType = ? AND productSubtype = ?',
+                [order.quantity, order.productType, order.productSubtype]
+            );
+        }
+
+        await connection.query(
+            'UPDATE orders SET deliveryStatus = ?, cancelledAt = NOW() WHERE id = ?',
             ['cancelled', orderId]
         );
+
+        await connection.commit();
 
         const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
         const orderResponse = orders[0];
@@ -408,8 +493,11 @@ router.patch('/orders/:id/cancel', async (req, res) => {
 
         res.status(200).json(orderResponse);
     } catch (error) {
+        await connection.rollback();
         console.error('Error cancelling order:', error);
         res.status(500).json({ error: 'Error cancelling order' });
+    } finally {
+        connection.release();
     }
 });
 
