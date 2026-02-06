@@ -5,7 +5,7 @@ import debounce from "lodash/debounce";
 
 const apiBaseUrl =
   process.env.NODE_ENV === "production"
-    ? "https://budget-hair-stock-management-system.onrender.com"
+    ? "http://165.22.220.142"
     : "http://165.22.220.142";
 
 export const useOrderStore = defineStore("orders", {
