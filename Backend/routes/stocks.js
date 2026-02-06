@@ -3,7 +3,7 @@ const router = express.Router();
 const db = require('../db');
 
 // Add stock
-router.post('/stock', async (req, res) => {
+router.post('/', async (req, res) => {
   const { productType, productSubtype, quantity } = req.body;
 
   if (!productType || !productSubtype || typeof quantity !== 'number') {
@@ -55,7 +55,7 @@ router.post('/stock', async (req, res) => {
 });
 
 // Edit stock (set exact quantity)
-router.put('/stock', async (req, res) => {
+router.put('/', async (req, res) => {
   const { productType, productSubtype, quantity } = req.body;
 
   if (!productType || !productSubtype || typeof quantity !== 'number') {
@@ -108,7 +108,7 @@ router.put('/stock', async (req, res) => {
 });
 
 // Delete stock subtype
-router.delete('/stock', async (req, res) => {
+router.delete('/', async (req, res) => {
   const { productType, productSubtype } = req.body;
 
   if (!productType || !productSubtype) {
@@ -143,7 +143,7 @@ router.delete('/stock', async (req, res) => {
 });
 
 // Delete entire product type
-router.delete('/stock/:productType', async (req, res) => {
+router.delete('/:productType', async (req, res) => {
   const { productType } = req.params;
 
   if (!productType) {
@@ -173,7 +173,7 @@ router.delete('/stock/:productType', async (req, res) => {
 });
 
 // Get all stock  ← this was the original crashing endpoint
-router.get('/stock', async (req, res) => {
+router.get('/', async (req, res) => {
   try {
     const [rows] = await db.query(
         'SELECT * FROM stock ORDER BY product_type, product_subtype'
@@ -196,7 +196,7 @@ router.get('/stock', async (req, res) => {
 });
 
 // Get stock history for today (already correct - uses timestamp)
-router.get('/stock/history', async (req, res) => {
+router.get('/history', async (req, res) => {
   try {
     const [rows] = await db.query(
         `SELECT * FROM stock_history
