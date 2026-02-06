@@ -13,7 +13,7 @@ router.post('/stock', async (req, res) => {
   try {
     // Insert or update stock
     await db.query(
-        `INSERT INTO stock (productType, productSubtype, quantity)
+        `INSERT INTO stock (product_type, product_subtype, quantity)
          VALUES (?, ?, ?)
          ON DUPLICATE KEY UPDATE quantity = quantity + VALUES(quantity)`,
         [productType, productSubtype, quantity]
@@ -21,30 +21,30 @@ router.post('/stock', async (req, res) => {
 
     // Add to history
     await db.query(
-        `INSERT INTO stock_history (productType, productSubtype, quantity, action)
+        `INSERT INTO stock_history (product_type, product_subtype, quantity, action)
          VALUES (?, ?, ?, 'added')`,
         [productType, productSubtype, quantity]
     );
 
     // Get updated stock
     const [rows] = await db.query(
-        'SELECT quantity FROM stock WHERE productType = ? AND productSubtype = ?',
+        'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
         [productType, productSubtype]
     );
 
-    const newStock = rows[0].quantity;
+    const newStock = rows[0]?.quantity ?? 0;
 
     // Emit socket event
     req.io.emit('stock-updated', {
-      productType,
-      productSubtype,
+      product_type: productType,
+      product_subtype: productSubtype,
       newStock
     });
 
     res.status(201).json({
       message: 'Stock updated successfully',
-      productType,
-      productSubtype,
+      product_type: productType,
+      product_subtype: productSubtype,
       quantity,
       newStock
     });
@@ -65,7 +65,7 @@ router.put('/stock', async (req, res) => {
   try {
     // Check if exists
     const [existing] = await db.query(
-        'SELECT quantity FROM stock WHERE productType = ? AND productSubtype = ?',
+        'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
         [productType, productSubtype]
     );
 
@@ -77,28 +77,28 @@ router.put('/stock', async (req, res) => {
 
     // Update stock
     await db.query(
-        'UPDATE stock SET quantity = ? WHERE productType = ? AND productSubtype = ?',
+        'UPDATE stock SET quantity = ? WHERE product_type = ? AND product_subtype = ?',
         [quantity, productType, productSubtype]
     );
 
     // Add to history
     await db.query(
-        `INSERT INTO stock_history (productType, productSubtype, oldQuantity, newQuantity, action)
+        `INSERT INTO stock_history (product_type, product_subtype, oldQuantity, newQuantity, action)
          VALUES (?, ?, ?, ?, 'edited')`,
         [productType, productSubtype, oldQuantity, quantity]
     );
 
     // Emit socket event
     req.io.emit('stock-updated', {
-      productType,
-      productSubtype,
+      product_type: productType,
+      product_subtype: productSubtype,
       newStock: quantity
     });
 
     res.status(200).json({
       message: 'Stock updated successfully',
-      productType,
-      productSubtype,
+      product_type: productType,
+      product_subtype: productSubtype,
       quantity
     });
   } catch (error) {
@@ -117,7 +117,7 @@ router.delete('/stock', async (req, res) => {
 
   try {
     const [result] = await db.query(
-        'DELETE FROM stock WHERE productType = ? AND productSubtype = ?',
+        'DELETE FROM stock WHERE product_type = ? AND product_subtype = ?',
         [productType, productSubtype]
     );
 
@@ -126,15 +126,15 @@ router.delete('/stock', async (req, res) => {
     }
 
     req.io.emit('stock-updated', {
-      productType,
-      productSubtype,
+      product_type: productType,
+      product_subtype: productSubtype,
       newStock: null
     });
 
     res.status(200).json({
       message: 'Stock subtype deleted successfully',
-      productType,
-      productSubtype
+      product_type: productType,
+      product_subtype: productSubtype
     });
   } catch (error) {
     console.error('Error deleting stock:', error);
@@ -152,7 +152,7 @@ router.delete('/stock/:productType', async (req, res) => {
 
   try {
     const [result] = await db.query(
-        'DELETE FROM stock WHERE productType = ?',
+        'DELETE FROM stock WHERE product_type = ?',
         [productType]
     );
 
@@ -160,11 +160,11 @@ router.delete('/stock/:productType', async (req, res) => {
       return res.status(404).json({ error: 'Stock type not found' });
     }
 
-    req.io.emit('stock-deleted', { productType });
+    req.io.emit('stock-deleted', { product_type: productType });
 
     res.status(200).json({
       message: 'Product type deleted successfully',
-      productType
+      product_type: productType
     });
   } catch (error) {
     console.error('Error deleting product type:', error);
@@ -172,18 +172,20 @@ router.delete('/stock/:productType', async (req, res) => {
   }
 });
 
-// Get all stock
+// Get all stock  ← this was the original crashing endpoint
 router.get('/stock', async (req, res) => {
   try {
-    const [rows] = await db.query('SELECT * FROM stock ORDER BY productType, productSubtype');
+    const [rows] = await db.query(
+        'SELECT * FROM stock ORDER BY product_type, product_subtype'
+    );
 
-    // Group by productType
+    // Group by product_type
     const stock = {};
     rows.forEach(row => {
-      if (!stock[row.productType]) {
-        stock[row.productType] = {};
+      if (!stock[row.product_type]) {
+        stock[row.product_type] = {};
       }
-      stock[row.productType][row.productSubtype] = row.quantity;
+      stock[row.product_type][row.product_subtype] = row.quantity;
     });
 
     res.status(200).json(stock);
@@ -193,7 +195,7 @@ router.get('/stock', async (req, res) => {
   }
 });
 
-// Get stock history for today
+// Get stock history for today (already correct - uses timestamp)
 router.get('/stock/history', async (req, res) => {
   try {
     const [rows] = await db.query(
