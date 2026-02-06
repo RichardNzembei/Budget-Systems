@@ -5,7 +5,7 @@ import debounce from "lodash/debounce";
 
 const apiBaseUrl =
   process.env.NODE_ENV === "production"
-    ? "https://165.22.220.142"
+    ? "https://165.22.220.142:5000"
     : "http://localhost:5000";
 
 export const useOrderStore = defineStore("orders", {
