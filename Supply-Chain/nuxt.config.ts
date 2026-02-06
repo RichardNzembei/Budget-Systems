@@ -11,7 +11,6 @@ export default defineNuxtConfig({
 
   // Import the CSS file with @theme
   css: [
-    '~/assets/css/app.css'
   ],
 
   app: {
@@ -55,7 +54,7 @@ export default defineNuxtConfig({
   // Runtime configuration
   runtimeConfig: {
     public: {
-      apiBase: 'http://localhost:5000'
+      apiBase: 'https://165.22.220.142'
     }
   },
 
