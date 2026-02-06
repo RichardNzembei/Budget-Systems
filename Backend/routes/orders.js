@@ -39,6 +39,25 @@ const generateOrderId = () => {
     return `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
 };
 
+// Helper function to emit stock update event
+const emitStockUpdate = async (io, productType, productSubtype) => {
+    try {
+        const [updatedStock] = await db.query(
+            'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
+            [productType, productSubtype]
+        );
+        if (updatedStock.length > 0) {
+            io.emit('stock-updated', {
+                productType,
+                productSubtype,
+                newStock: updatedStock[0].quantity
+            });
+        }
+    } catch (error) {
+        console.error('Error emitting stock update:', error);
+    }
+};
+
 // Create new order
 router.post('/', async (req, res) => {
     const {
@@ -130,15 +149,7 @@ router.post('/', async (req, res) => {
         req.io.emit('order-created', orderResponse);
 
         // Emit stock update
-        const [updatedStock] = await db.query(
-            'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
-            [productType, productSubtype]
-        );
-        req.io.emit('stock-updated', {
-            product_type: productType,
-            product_subtype: productSubtype,
-            newStock: updatedStock[0].quantity
-        });
+        await emitStockUpdate(req.io, productType, productSubtype);
 
         // Send notification
         const notificationPayload = {
@@ -159,7 +170,7 @@ router.post('/', async (req, res) => {
     }
 });
 
-// Get all orders (unchanged - no productType/subtype here)
+// Get all orders
 router.get('/', async (req, res) => {
     try {
         const [orders] = await db.query(
@@ -173,6 +184,7 @@ router.get('/', async (req, res) => {
     }
 });
 
+// Delete order
 router.delete('/:id', async (req, res) => {
     const orderId = req.params.id;
 
@@ -190,6 +202,7 @@ router.delete('/:id', async (req, res) => {
 
         const order = orders[0];
 
+        // Restore stock if order was not delivered or returned
         if (order.deliveryStatus !== 'delivered' && order.deliveryStatus !== 'returned') {
             await connection.query(
                 'UPDATE stock SET quantity = quantity + ? WHERE product_type = ? AND product_subtype = ?',
@@ -201,7 +214,13 @@ router.delete('/:id', async (req, res) => {
 
         await connection.commit();
 
+        // Emit order deleted event
         req.io.emit('order-deleted', { id: parseInt(orderId) });
+
+        // Emit stock update if stock was restored
+        if (order.deliveryStatus !== 'delivered' && order.deliveryStatus !== 'returned') {
+            await emitStockUpdate(req.io, order.product_type, order.product_subtype);
+        }
 
         res.status(200).json({ message: 'Order deleted successfully' });
     } catch (error) {
@@ -213,13 +232,231 @@ router.delete('/:id', async (req, res) => {
     }
 });
 
-// Return order - restore stock + emit
+// Update delivery status
+router.patch('/:id/delivery', async (req, res) => {
+    const orderId = req.params.id;
+    const { deliveryStatus, deliveredBy } = req.body;
+
+    if (!deliveryStatus) {
+        return res.status(400).json({ error: 'Delivery status is required' });
+    }
+
+    const validStatuses = ['pending', 'in_transit', 'delivered', 'cancelled', 'returned'];
+    if (!validStatuses.includes(deliveryStatus)) {
+        return res.status(400).json({
+            error: 'Invalid delivery status',
+            validStatuses
+        });
+    }
+
+    try {
+        const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+
+        if (existing.length === 0) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        let updateQuery = 'UPDATE orders SET deliveryStatus = ?';
+        let params = [deliveryStatus];
+
+        // Add delivered timestamp and person if status is delivered
+        if (deliveryStatus === 'delivered') {
+            updateQuery += ', deliveredAt = NOW()';
+            if (deliveredBy) {
+                updateQuery += ', deliveredBy = ?';
+                params.push(deliveredBy);
+            }
+        }
+
+        updateQuery += ' WHERE id = ?';
+        params.push(orderId);
+
+        await db.query(updateQuery, params);
+
+        const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+        const orderResponse = orders[0];
+
+        req.io.emit('order-updated', orderResponse);
+
+        res.status(200).json(orderResponse);
+    } catch (error) {
+        console.error('Error updating delivery status:', error);
+        res.status(500).json({ error: 'Error updating delivery status' });
+    }
+});
+
+// Update payment status
+router.patch('/:id/payment', async (req, res) => {
+    const orderId = req.params.id;
+    const { paymentStatus, amountPaid } = req.body;
+
+    if (!paymentStatus) {
+        return res.status(400).json({ error: 'Payment status is required' });
+    }
+
+    const validStatuses = ['unpaid', 'partially_paid', 'paid'];
+    if (!validStatuses.includes(paymentStatus)) {
+        return res.status(400).json({
+            error: 'Invalid payment status',
+            validStatuses
+        });
+    }
+
+    try {
+        const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+
+        if (existing.length === 0) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        const order = existing[0];
+
+        let updateQuery = 'UPDATE orders SET paymentStatus = ?';
+        let params = [paymentStatus];
+
+        // Update amount paid if provided
+        if (amountPaid !== undefined && amountPaid !== null) {
+            const newAmountPaid = parseFloat(amountPaid);
+
+            if (newAmountPaid < 0) {
+                return res.status(400).json({ error: 'Amount paid cannot be negative' });
+            }
+
+            if (newAmountPaid > order.totalAmount) {
+                return res.status(400).json({
+                    error: 'Amount paid cannot exceed total amount',
+                    totalAmount: order.totalAmount,
+                    amountPaid: newAmountPaid
+                });
+            }
+
+            updateQuery += ', amountPaid = ?';
+            params.push(newAmountPaid);
+
+            // Auto-update payment status based on amount
+            if (newAmountPaid === 0) {
+                params[0] = 'unpaid';
+            } else if (newAmountPaid >= order.totalAmount) {
+                params[0] = 'paid';
+            } else {
+                params[0] = 'partially_paid';
+            }
+        }
+
+        updateQuery += ' WHERE id = ?';
+        params.push(orderId);
+
+        await db.query(updateQuery, params);
+
+        const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+        const orderResponse = orders[0];
+
+        req.io.emit('order-updated', orderResponse);
+
+        res.status(200).json(orderResponse);
+    } catch (error) {
+        console.error('Error updating payment status:', error);
+        res.status(500).json({ error: 'Error updating payment status' });
+    }
+});
+
+// Update priority
+router.patch('/:id/priority', async (req, res) => {
+    const orderId = req.params.id;
+    const { priority } = req.body;
+
+    if (!priority) {
+        return res.status(400).json({ error: 'Priority is required' });
+    }
+
+    const validPriorities = ['low', 'normal', 'high', 'urgent'];
+    if (!validPriorities.includes(priority)) {
+        return res.status(400).json({
+            error: 'Invalid priority',
+            validPriorities
+        });
+    }
+
+    try {
+        const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+
+        if (existing.length === 0) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        await db.query(
+            'UPDATE orders SET priority = ? WHERE id = ?',
+            [priority, orderId]
+        );
+
+        const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+        const orderResponse = orders[0];
+
+        req.io.emit('order-updated', orderResponse);
+
+        res.status(200).json(orderResponse);
+    } catch (error) {
+        console.error('Error updating priority:', error);
+        res.status(500).json({ error: 'Error updating priority' });
+    }
+});
+
+// Add worker notes
+router.patch('/:id/worker-notes', async (req, res) => {
+    const orderId = req.params.id;
+    const { workerNotes, workerName } = req.body;
+
+    if (!workerNotes) {
+        return res.status(400).json({ error: 'Worker notes are required' });
+    }
+
+    try {
+        const [existing] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+
+        if (existing.length === 0) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        let updateQuery = 'UPDATE orders SET workerNotes = ?, workerNotesUpdatedAt = NOW()';
+        let params = [workerNotes];
+
+        if (workerName) {
+            updateQuery += ', workerName = ?';
+            params.push(workerName);
+        }
+
+        updateQuery += ' WHERE id = ?';
+        params.push(orderId);
+
+        await db.query(updateQuery, params);
+
+        const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
+        const orderResponse = orders[0];
+
+        req.io.emit('order-updated', orderResponse);
+
+        res.status(200).json(orderResponse);
+    } catch (error) {
+        console.error('Error adding worker notes:', error);
+        res.status(500).json({ error: 'Error adding worker notes' });
+    }
+});
+
+// Return order - restore stock
 router.patch('/:id/return', async (req, res) => {
     const orderId = req.params.id;
     const { quantity, returnType } = req.body;
 
     if (!quantity || !returnType) {
         return res.status(400).json({ error: 'Quantity and return type are required' });
+    }
+
+    const validReturnTypes = ['full', 'partial'];
+    if (!validReturnTypes.includes(returnType)) {
+        return res.status(400).json({
+            error: 'Invalid return type',
+            validReturnTypes
+        });
     }
 
     const connection = await db.getConnection();
@@ -238,7 +475,11 @@ router.patch('/:id/return', async (req, res) => {
 
         if (quantity > orderData.quantity) {
             await connection.rollback();
-            return res.status(400).json({ error: 'Return quantity exceeds order quantity' });
+            return res.status(400).json({
+                error: 'Return quantity exceeds order quantity',
+                orderQuantity: orderData.quantity,
+                returnQuantity: quantity
+            });
         }
 
         // Restore stock
@@ -266,19 +507,10 @@ router.patch('/:id/return', async (req, res) => {
         const [orders] = await db.query('SELECT * FROM orders WHERE id = ?', [orderId]);
         const orderResponse = orders[0];
 
-        const [stockRows] = await db.query(
-            'SELECT quantity FROM stock WHERE product_type = ? AND product_subtype = ?',
-            [orderData.product_type, orderData.product_subtype]
-        );
-
         req.io.emit('order-updated', orderResponse);
 
-        const stockPayload = {
-            product_type: orderData.product_type,
-            product_subtype: orderData.product_subtype,
-            newStock: stockRows[0].quantity
-        };
-        req.io.emit('stock-updated', stockPayload);
+        // Emit stock update
+        await emitStockUpdate(req.io, orderData.product_type, orderData.product_subtype);
 
         res.status(200).json(orderResponse);
     } catch (error) {
@@ -308,7 +540,10 @@ router.patch('/:id/cancel', async (req, res) => {
 
         const order = existing[0];
 
-        if (order.deliveryStatus !== 'delivered') {
+        // Only restore stock if order hasn't been delivered
+        const shouldRestoreStock = order.deliveryStatus !== 'delivered';
+
+        if (shouldRestoreStock) {
             await connection.query(
                 'UPDATE stock SET quantity = quantity + ? WHERE product_type = ? AND product_subtype = ?',
                 [order.quantity, order.product_type, order.product_subtype]
@@ -327,6 +562,11 @@ router.patch('/:id/cancel', async (req, res) => {
 
         req.io.emit('order-updated', orderResponse);
 
+        // Emit stock update if stock was restored
+        if (shouldRestoreStock) {
+            await emitStockUpdate(req.io, order.product_type, order.product_subtype);
+        }
+
         res.status(200).json(orderResponse);
     } catch (error) {
         await connection.rollback();
@@ -336,7 +576,5 @@ router.patch('/:id/cancel', async (req, res) => {
         connection.release();
     }
 });
-
-// The other routes (delivery, payment, priority, worker-notes) don't touch stock → no changes needed
 
 module.exports = router;
