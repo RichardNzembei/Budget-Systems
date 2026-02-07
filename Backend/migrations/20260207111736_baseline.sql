@@ -1,0 +1,2 @@
+-- Baseline migration - database already exists
+-- This migration represents the current state of the database

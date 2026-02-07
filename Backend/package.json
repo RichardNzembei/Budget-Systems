@@ -4,7 +4,14 @@
   "main": "app.js",
   "scripts": {
     "start": "node app.js",
-    "dev": "nodemon app.js"
+    "dev": "nodemon app.js",
+    "schema:diff": "atlas schema diff --from mysql://budgethair_user:BudgetSystems@localhost:3306/budgethair --to file://schema.hcl --dev-url mysql://budgethair_user:BudgetSystems@localhost:3306/budgethair_dev",
+    "schema:apply": "atlas schema apply --env local --auto-approve",
+    "schema:apply:dry": "atlas schema apply --env local --dry-run",
+    "migrate:new": "atlas migrate diff --env local",
+    "migrate:status": "atlas migrate status --env local",
+    "migrate:apply": "atlas migrate apply --env local --auto-approve",
+    "migrate:apply:prod": "atlas migrate apply --env production"
   },
   "dependencies": {
     "bcrypt": "^5.1.1",
