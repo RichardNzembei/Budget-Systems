@@ -26,7 +26,7 @@ app.use(bodyParser.json());
 app.use(
     cors({
       origin: [
-          "https://budget-hair-supply-chain.vercel.app/",
+          "https://budget-hair-supply-chain.vercel.app",
         "http://localhost:3000",
       ],
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
