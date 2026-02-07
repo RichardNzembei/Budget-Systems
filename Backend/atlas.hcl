@@ -1,7 +1,7 @@
 env "local" {
   src = "file://schema.hcl"
   url = "mysql://budgethair_user:BudgetSystems@localhost:3306/budgethair"
-  dev = "mysql://budgethair_user:BudgetSystems@localhost:3306/budgethair_dev"
+  dev = "mysql://budgethair_user:BudgetSystems@localhost:3306/budgethair"
   
   migration {
     dir = "file://migrations"
