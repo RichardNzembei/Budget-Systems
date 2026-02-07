@@ -5,58 +5,67 @@ const http = require('http');
 const socketIo = require('socket.io');
 const stockRoutes = require('./routes/stocks');
 const orderRoutes = require('./routes/orders');
-require('./db'); // Test MySQL connection on startup
+require('./db');
 
 const app = express();
 const server = http.createServer(app);
 
+// ✅ FIXED CORS Configuration
+const allowedOrigins = [
+    "https://budget-hair-supply-chain.vercel.app",
+    "http://localhost:3000",
+];
+
 const io = socketIo(server, {
-  cors: {
-    origin: [
-        "https://budget-hair-supply-chain.vercel.app",
-      "http://localhost:3000",
-    ],
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
-  },
+    cors: {
+        origin: allowedOrigins,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+        credentials: true,
+    },
 });
 
 const PORT = process.env.PORT || 5000;
 
 app.use(bodyParser.json());
+
+// ✅ FIXED CORS middleware
 app.use(
     cors({
-      origin: [
-          "https://budget-hair-supply-chain.vercel.app",
-        "http://localhost:3000",
-      ],
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+        origin: function (origin, callback) {
+            // Allow requests with no origin (like mobile apps or curl requests)
+            if (!origin) return callback(null, true);
+
+            if (allowedOrigins.indexOf(origin) === -1) {
+                const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+                return callback(new Error(msg), false);
+            }
+            return callback(null, true);
+        },
+        credentials: true,
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
     })
 );
 
-// Attach Socket.IO to request object
+// Rest of your code stays the same...
 app.use((req, res, next) => {
-  req.io = io;
-  next();
+    req.io = io;
+    next();
 });
 
-// Health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+    res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
 });
 
-// Routes
 app.use('/api/stock', stockRoutes);
 app.use('/api/orders', orderRoutes);
 
-// Socket.IO connection
 io.on('connection', (socket) => {
-  console.log('✅ WebSocket client connected:', socket.id);
-  socket.on('disconnect', () => {
-    console.log('❌ WebSocket client disconnected:', socket.id);
-  });
+    console.log('✅ WebSocket client connected:', socket.id);
+    socket.on('disconnect', () => {
+        console.log('❌ WebSocket client disconnected:', socket.id);
+    });
 });
 
-// Start server
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`🚀 Server running on port ${PORT}`);
 });
